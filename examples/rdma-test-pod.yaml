@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rdma-test-pod
+spec:
+  containers:
+  - name: rdma-test-container
+    image: mellanox/rping-test
+    securityContext:
+      capabilities:
+        add: [ "IPC_LOCK" ]
+    resources:
+      limits:
+        nvidia.com/rdma: 1
+      requests:
+        nvidia.com/rdma: 1
+    command:
+    - sleep
+    - infinity
+  nodeSelector:
+    feature.node.kubernetes.io/network-sriov.capable: "true" 
