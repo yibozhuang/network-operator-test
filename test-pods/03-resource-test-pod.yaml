@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: resource-test
+  labels:
+    test: "true"
+    scenario: "resource-test"
+spec:
+  containers:
+  - name: resource-test
+    image: nicolaka/netshoot
+    resources:
+      requests:
+        nvidia.com/rdma: 1
+        nvidia.com/gpu: 1
+        cpu: "100m"
+        memory: "64Mi"
+      limits:
+        nvidia.com/rdma: 1
+        nvidia.com/gpu: 1
+        cpu: "200m"
+        memory: "128Mi"
+    command:
+      - /bin/bash
+      - -c
+      - |
+        # Print resource information
+        echo "=== CPU Info ==="
+        cat /proc/cpuinfo
+        
+        # Print memory info
+        echo "=== Memory Info ==="
+        cat /proc/meminfo
+        
+        # Print NVIDIA devices (if available)
+        echo "=== NVIDIA Devices ==="
+        ls -l /dev/nvidia* 2>/dev/null || echo "No NVIDIA devices found"
+        
+        # Print RDMA devices (if available)
+        echo "=== RDMA Devices ==="
+        ls -l /dev/infiniband/ 2>/dev/null || echo "No RDMA devices found"
+        
+        # Keep container running
+        trap : TERM INT; sleep infinity & wait
+    securityContext:
+      capabilities:
+        add: ["IPC_LOCK", "NET_ADMIN"] 

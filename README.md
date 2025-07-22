@@ -105,6 +105,150 @@ Additional requirements:
    kind delete cluster --name netop-test
    ```
 
+### Advanced Component Testing in kind
+
+While kind cannot test actual RDMA/hardware functionality, we can still test and understand many important components of the network operator:
+
+#### 1. Testing Custom Resource Definitions (CRDs)
+
+```bash
+# List all CRDs installed by the operator
+kubectl get crds | grep mellanox
+
+# Examine CRD structures
+kubectl explain NicClusterPolicy
+kubectl explain MacvlanNetwork
+kubectl explain HostDeviceNetwork
+```
+
+#### 2. Testing Operator Reconciliation
+
+Create a test policy with deliberately incorrect settings to observe the operator's behavior:
+
+```yaml
+# test-policy-invalid.yaml
+apiVersion: mellanox.com/v1alpha1
+kind: NicClusterPolicy
+metadata:
+  name: test-policy-invalid
+spec:
+  ofedDriver:
+    image: nvcr.io/nvidia/mellanox/driver
+    repository: nvcr.io/nvidia/mellanox
+    version: invalid-version  # Invalid version to test error handling
+```
+
+Apply and observe:
+```bash
+kubectl apply -f test-policy-invalid.yaml
+kubectl describe NicClusterPolicy test-policy-invalid
+kubectl logs -n nvidia-network-operator deploy/network-operator
+```
+
+#### 3. Testing State Machine Transitions
+
+Create a series of policy updates to test state transitions:
+
+```bash
+# 1. Create initial policy
+kubectl apply -f config/samples/nic-cluster-policy.yaml
+
+# 2. Watch operator logs in a separate terminal
+kubectl logs -n nvidia-network-operator deploy/network-operator -f
+
+# 3. Apply updates in sequence
+kubectl patch NicClusterPolicy nic-cluster-policy --type merge \
+  -p '{"spec":{"ofedDriver":{"version":"5.4-3.1.0.0"}}}'
+```
+
+#### 4. Testing Network Configurations
+
+Test different network configurations (even without real hardware):
+
+```yaml
+# test-network-config.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: test-network
+  namespace: default
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "macvlan",
+    "master": "eth0",
+    "mode": "bridge",
+    "ipam": {
+      "type": "host-local",
+      "subnet": "192.168.1.0/24",
+      "rangeStart": "192.168.1.200",
+      "rangeEnd": "192.168.1.216"
+    }
+  }'
+```
+
+#### 5. Testing Operator Metrics
+
+If metrics are enabled:
+
+```bash
+# Port-forward the metrics endpoint
+kubectl port-forward -n nvidia-network-operator deploy/network-operator 8443:8443
+
+# In another terminal, query metrics
+curl -k https://localhost:8443/metrics
+```
+
+#### 6. Multi-node Testing
+
+Create a multi-node kind cluster to better understand component interactions:
+
+```bash
+# Create multi-node kind configuration
+cat <<EOF > kind-multi-node.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+- role: worker
+EOF
+
+# Create cluster
+kind create cluster --config kind-multi-node.yaml --name netop-test-multi
+
+# Enable debug logging in operator
+kubectl patch deployment -n nvidia-network-operator network-operator \
+  --type json \
+  -p '[{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "LOG_LEVEL", "value": "debug"}}]'
+
+# Monitor components
+watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
+```
+
+#### Testing Best Practices
+
+1. **Start Small**
+   - Begin with minimal configurations
+   - Add components one at a time
+   - Document behavior changes
+
+2. **Use Labels and Annotations**
+   - Label test resources for easy cleanup
+   - Use annotations to track test cases
+
+3. **Monitor Multiple Components**
+   - Use multiple terminal windows to watch different components
+   - Consider using k9s for better visibility
+
+4. **Clean Up Between Tests**
+   ```bash
+   # Clean up all test resources
+   kubectl delete NicClusterPolicy --all
+   kubectl delete NetworkAttachmentDefinition --all
+   kind delete cluster --name netop-test-multi
+   ```
+
 ## Cloud Testing Options
 
 ### Option 1: Azure (Most Common)

@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: basic-network-test
+  annotations:
+    k8s.v1.cni.cncf.io/networks: test-network
+  labels:
+    test: "true"
+    scenario: "basic-network"
+spec:
+  containers:
+  - name: network-test
+    image: nicolaka/netshoot  # Network troubleshooting toolkit
+    command: 
+      - /bin/bash
+      - -c
+      - |
+        # Print network interfaces
+        echo "=== Network Interfaces ==="
+        ip addr show
+        
+        # Print routing table
+        echo "=== Routing Table ==="
+        ip route
+        
+        # Keep container running
+        trap : TERM INT; sleep infinity & wait
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"] 

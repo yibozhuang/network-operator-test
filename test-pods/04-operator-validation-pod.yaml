@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: operator-validation
+  labels:
+    test: "true"
+    scenario: "operator-validation"
+spec:
+  containers:
+  - name: validation-test
+    image: nicolaka/netshoot
+    command:
+      - /bin/bash
+      - -c
+      - |
+        # Function to check operator status
+        check_operator() {
+          echo "=== Checking Operator Status ==="
+          kubectl get pods -n nvidia-network-operator
+          kubectl get NicClusterPolicy
+        }
+        
+        # Function to check CRDs
+        check_crds() {
+          echo "=== Checking CRDs ==="
+          kubectl get crds | grep mellanox
+        }
+        
+        # Function to check network plugins
+        check_plugins() {
+          echo "=== Checking Network Plugins ==="
+          ls -l /etc/cni/net.d/
+          kubectl get NetworkAttachmentDefinition --all-namespaces
+        }
+        
+        # Run initial checks
+        check_operator
+        check_crds
+        check_plugins
+        
+        # Monitor for changes
+        echo "=== Monitoring for Changes ==="
+        while true; do
+          sleep 30
+          check_operator
+          check_crds
+          check_plugins
+        done
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"]
+    volumeMounts:
+    - name: cni-conf
+      mountPath: /etc/cni/net.d
+    - name: kubeconfig
+      mountPath: /root/.kube
+  volumes:
+  - name: cni-conf
+    hostPath:
+      path: /etc/cni/net.d
+  - name: kubeconfig
+    hostPath:
+      path: /etc/kubernetes/admin.conf 
