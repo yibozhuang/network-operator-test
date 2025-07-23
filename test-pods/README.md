@@ -21,16 +21,27 @@ Before running any test pods, ensure you have the following components installed
      --version v25.4.0 \
      --wait
 
+   # Verify CRDs are installed
+   kubectl get crds | grep mellanox
+   
    # Install Whereabouts CNI (required for IP address management)
-   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/daemonset-install.yaml
-   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/whereabouts.cni.cncf.io_ippools.yaml
-   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml
+   helm install whereabouts oci://ghcr.io/k8snetworkplumbingwg/whereabouts-chart
    ```
 
 2. **Required Custom Resources**
    ```bash
    # Deploy NicClusterPolicy (required for all network-related tests)
    kubectl apply -f ../example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
+   
+   # Verify NicClusterPolicy status
+   kubectl get NicClusterPolicy
+   kubectl describe NicClusterPolicy nic-cluster-policy
+   
+   # Check if any validation errors occurred
+   kubectl get events --field-selector type=Warning
+   
+   # If you see validation errors, check the operator logs
+   kubectl logs -n nvidia-network-operator -l app=network-operator
 
    # Deploy MacvlanNetwork (required for network interface tests)
    kubectl apply -f ../example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
@@ -40,6 +51,32 @@ Before running any test pods, ensure you have the following components installed
    kubectl get MacvlanNetwork
    kubectl get network-attachment-definitions -A
    ```
+
+### Troubleshooting CR Installation
+
+If you encounter errors when applying the CRs:
+
+1. **Schema Validation Errors**
+   ```bash
+   # Check the CRD schema
+   kubectl get crd nicclusterpolicies.mellanox.com -o yaml | less
+   
+   # Check operator logs for validation details
+   kubectl logs -n nvidia-network-operator -l app=network-operator
+   ```
+
+2. **Resource Status**
+   ```bash
+   # Check resource status and events
+   kubectl describe NicClusterPolicy nic-cluster-policy
+   kubectl get events --field-selector involvedObject.kind=NicClusterPolicy
+   ```
+
+3. **Common Issues**
+   - Ensure the operator is running before applying CRs
+   - Verify CRD versions match your operator version
+   - Check that all required fields in CRs are properly formatted
+   - Ensure container images and versions are accessible
 
 ## Test Pod Dependencies
 
