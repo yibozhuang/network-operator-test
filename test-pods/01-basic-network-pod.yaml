@@ -1,16 +1,45 @@
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: test-network-basic
+  namespace: default
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "plugins": [
+      {
+        "type": "macvlan",
+        "master": "eth0",
+        "mode": "bridge",
+        "ipam": {
+          "type": "whereabouts",
+          "range": "192.168.3.0/24",
+          "exclude": [
+            "192.168.3.1/32",
+            "192.168.3.254/32"
+          ],
+          "kubernetes": {
+            "kubeconfig": "/etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig"
+          }
+        }
+      }
+    ]
+  }'
+---
 apiVersion: v1
 kind: Pod
 metadata:
   name: basic-network-test
   annotations:
-    k8s.v1.cni.cncf.io/networks: test-network
+    k8s.v1.cni.cncf.io/networks: default/test-network-basic
   labels:
     test: "true"
     scenario: "basic-network"
 spec:
   containers:
   - name: network-test
-    image: nicolaka/netshoot  # Network troubleshooting toolkit
+    image: nicolaka/netshoot
     command: 
       - /bin/bash
       - -c
@@ -21,7 +50,19 @@ spec:
         
         # Print routing table
         echo "=== Routing Table ==="
-        ip route
+        ip route show table all
+        
+        # Test additional network interface
+        echo "=== Testing Additional Network ==="
+        if ip addr show net1 >/dev/null 2>&1; then
+          ip addr show net1
+          echo "Additional Network IP:"
+          ip -4 addr show net1 | grep inet | awk '{print $2}'
+        else
+          echo "Additional network interface (net1) not found"
+          echo "Available interfaces:"
+          ip link show
+        fi
         
         # Keep container running
         trap : TERM INT; sleep infinity & wait

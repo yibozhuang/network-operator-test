@@ -12,12 +12,10 @@ spec:
     resources:
       requests:
         nvidia.com/rdma: 1
-        nvidia.com/gpu: 1
         cpu: "100m"
         memory: "64Mi"
       limits:
         nvidia.com/rdma: 1
-        nvidia.com/gpu: 1
         cpu: "200m"
         memory: "128Mi"
     command:
@@ -27,18 +25,55 @@ spec:
         # Print resource information
         echo "=== CPU Info ==="
         cat /proc/cpuinfo
+        echo "CPU Quota: $(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo 'Not available')"
+        echo "CPU Period: $(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo 'Not available')"
         
         # Print memory info
         echo "=== Memory Info ==="
         cat /proc/meminfo
+        echo "Memory Limit: $(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo 'Not available')"
         
-        # Print NVIDIA devices (if available)
-        echo "=== NVIDIA Devices ==="
-        ls -l /dev/nvidia* 2>/dev/null || echo "No NVIDIA devices found"
-        
-        # Print RDMA devices (if available)
+        # Print RDMA devices
         echo "=== RDMA Devices ==="
-        ls -l /dev/infiniband/ 2>/dev/null || echo "No RDMA devices found"
+        if command -v ibstat >/dev/null 2>&1; then
+          ibstat
+        else
+          echo "ibstat not found - RDMA tools not installed"
+        fi
+        
+        if [ -d "/dev/infiniband" ]; then
+          echo "InfiniBand devices:"
+          ls -l /dev/infiniband/
+        else
+          echo "No InfiniBand devices found in /dev/infiniband/"
+        fi
+        
+        # Print NVIDIA devices
+        echo "=== NVIDIA Devices ==="
+        if command -v nvidia-smi >/dev/null 2>&1; then
+          nvidia-smi
+        else
+          echo "nvidia-smi not found - NVIDIA tools not installed"
+        fi
+        
+        if [ -d "/dev/nvidia0" ]; then
+          echo "NVIDIA devices:"
+          ls -l /dev/nvidia*
+        else
+          echo "No NVIDIA devices found"
+        fi
+        
+        # Print resource allocation from Kubernetes perspective
+        echo "=== Kubernetes Resource Allocation ==="
+        echo "This information is available through the Kubernetes API"
+        echo "Requests:"
+        echo "  CPU: 100m"
+        echo "  Memory: 64Mi"
+        echo "  RDMA: 1"
+        echo "Limits:"
+        echo "  CPU: 200m"
+        echo "  Memory: 128Mi"
+        echo "  RDMA: 1"
         
         # Keep container running
         trap : TERM INT; sleep infinity & wait

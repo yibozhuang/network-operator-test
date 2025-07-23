@@ -11,22 +11,67 @@ Before running any test pods, ensure you have the following components installed
    # Create kind cluster with multiple nodes
    kind create cluster --config ../kind-multi-node.yaml
 
+   # Install CNI plugins on all nodes
+   # Option 1: Using the provided script (recommended)
+   ./scripts/install-cni-plugins.sh
+
+   # Option 2: Manual installation
+   # Note: This example detects your architecture automatically
+   ARCH=$(uname -m)
+   case ${ARCH} in
+       x86_64)  ARCH="amd64" ;;
+       aarch64|arm64) ARCH="arm64" ;;
+       *) echo "Unsupported architecture: ${ARCH}"; exit 1 ;;
+   esac
+   
+   for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+     echo "Installing CNI plugins on node ${node}"
+     docker exec ${node} mkdir -p /opt/cni/bin
+     # Install standard CNI plugins (includes macvlan)
+     docker exec ${node} curl -L "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-${ARCH}-v1.3.0.tgz" | \
+       docker exec -i ${node} tar xz -C /opt/cni/bin
+   done
+
    # Install Network Operator
    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
    helm repo update
-
+   
    helm install network-operator nvidia/network-operator \
      -n nvidia-network-operator \
      --create-namespace \
      --version v25.4.0 \
      --wait
 
-   # Verify CRDs are installed
-   kubectl get crds | grep mellanox
+   # Install Multus CNI
+   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
 
-   # Install Whereabouts CNI (required for IP address management)
+   # Install Whereabouts CNI
    helm install whereabouts oci://ghcr.io/k8snetworkplumbingwg/whereabouts-chart
+
+   # Verify CNI installations
+   kubectl -n kube-system get pods -l app=multus
+   kubectl -n kube-system get pods -l name=whereabouts
+
+   # Verify CNI plugins installation on nodes
+   for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+     echo "=== Checking CNI plugins on ${node} ==="
+     docker exec ${node} ls -l /opt/cni/bin/
+   done
    ```
+
+**Note for Apple Silicon (M1/M2) Users:**
+The script and instructions above will automatically detect your ARM64 architecture and download the appropriate CNI plugins. If you're running into any architecture-related issues, verify that:
+1. Your kind cluster is running ARM64 nodes (this is automatic on M1/M2 Macs)
+2. The downloaded CNI plugins are the ARM64 version
+3. All container images support ARM64 architecture
+
+You can verify the architecture of your nodes with:
+```bash
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  echo "=== ${node} architecture ==="
+  docker exec ${node} uname -m
+done
+```
 
 2. **Required Custom Resources**
    ```bash
@@ -98,12 +143,20 @@ kubectl apply -f 01-basic-network-pod.yaml
 ### 2. Multi-Network Test (`02-multi-network-pod.yaml`)
 **Required Resources:**
 - NicClusterPolicy (status: ready)
-- Whereabouts CNI plugin installed and running
+- Multus CNI installed and running
+- Whereabouts CNI installed and running
 - The pod yaml includes both network definitions
 
 ```bash
 # Verify prerequisites
-kubectl get pods -n kube-system -l name=whereabouts
+kubectl -n kube-system get pods -l app=multus
+kubectl -n kube-system get pods -l name=whereabouts
+
+# Check CNI configuration
+for node in $(kubectl get nodes -o name); do
+  echo "=== Checking CNI config on ${node} ==="
+  kubectl debug ${node#node/} -it --image=busybox -- ls -l /host/etc/cni/net.d/
+done
 
 # Apply the test (this will create both network definitions)
 kubectl apply -f 02-multi-network-pod.yaml
@@ -122,6 +175,7 @@ kubectl logs multi-network-test
 
 # For debugging network issues
 kubectl describe pod multi-network-test
+kubectl logs -n kube-system -l app=multus
 kubectl logs -n kube-system -l name=whereabouts
 ```
 
@@ -133,22 +187,42 @@ The pod should show three network interfaces:
 
 **Troubleshooting:**
 If networks are not attached:
-1. Verify Whereabouts is running:
+
+1. Verify Multus and Whereabouts are running:
    ```bash
-   kubectl get pods -n kube-system -l name=whereabouts
-   kubectl logs -n kube-system -l name=whereabouts
+   # Check Multus
+   kubectl -n kube-system get pods -l app=multus
+   kubectl -n kube-system logs -l app=multus
+   
+   # Check Whereabouts
+   kubectl -n kube-system get pods -l name=whereabouts
+   kubectl -n kube-system logs -l name=whereabouts
    ```
 
 2. Check network definitions:
    ```bash
+   # Get all network definitions
    kubectl get network-attachment-definitions -o yaml
+   
+   # Check events
+   kubectl get events --field-selector involvedObject.kind=NetworkAttachmentDefinition
    ```
 
-3. Check CNI configuration:
+3. Check CNI configuration on nodes:
    ```bash
-   # On the node running the pod
-   ls /etc/cni/net.d/
-   cat /etc/cni/net.d/*
+   # Debug on a specific node
+   NODE_NAME=$(kubectl get pod multi-network-test -o jsonpath='{.spec.nodeName}')
+   kubectl debug node/$NODE_NAME -it --image=busybox -- chroot /host sh -c \
+     "ls -l /etc/cni/net.d/ && cat /etc/cni/net.d/*.conf*"
+   ```
+
+4. Check pod annotations and events:
+   ```bash
+   # Check pod annotations
+   kubectl get pod multi-network-test -o jsonpath='{.metadata.annotations}' | jq
+   
+   # Check pod events
+   kubectl get events --field-selector involvedObject.name=multi-network-test
    ```
 
 ### 3. Resource Test (`03-resource-test-pod.yaml`)
