@@ -14,7 +14,7 @@ Before running any test pods, ensure you have the following components installed
    # Install Network Operator
    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
    helm repo update
-   
+
    helm install network-operator nvidia/network-operator \
      -n nvidia-network-operator \
      --create-namespace \
@@ -23,7 +23,7 @@ Before running any test pods, ensure you have the following components installed
 
    # Verify CRDs are installed
    kubectl get crds | grep mellanox
-   
+
    # Install Whereabouts CNI (required for IP address management)
    helm install whereabouts oci://ghcr.io/k8snetworkplumbingwg/whereabouts-chart
    ```
@@ -32,20 +32,20 @@ Before running any test pods, ensure you have the following components installed
    ```bash
    # Deploy NicClusterPolicy (required for all network-related tests)
    kubectl apply -f ../example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
-   
+
    # Verify NicClusterPolicy status
    kubectl get NicClusterPolicy
    kubectl describe NicClusterPolicy nic-cluster-policy
-   
+
    # Check if any validation errors occurred
    kubectl get events --field-selector type=Warning
-   
+
    # If you see validation errors, check the operator logs
-   kubectl logs -n nvidia-network-operator -l app=network-operator
+   kubectl logs -n nvidia-network-operator -l app.kubernetes.io/name=network-operator
 
    # Deploy MacvlanNetwork (required for network interface tests)
    kubectl apply -f ../example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
-   
+
    # Verify resources are ready
    kubectl get NicClusterPolicy
    kubectl get MacvlanNetwork
@@ -60,7 +60,7 @@ If you encounter errors when applying the CRs:
    ```bash
    # Check the CRD schema
    kubectl get crd nicclusterpolicies.mellanox.com -o yaml | less
-   
+
    # Check operator logs for validation details
    kubectl logs -n nvidia-network-operator -l app=network-operator
    ```
@@ -98,16 +98,58 @@ kubectl apply -f 01-basic-network-pod.yaml
 ### 2. Multi-Network Test (`02-multi-network-pod.yaml`)
 **Required Resources:**
 - NicClusterPolicy (status: ready)
-- Two network definitions (test-network and test-network-2)
-- The pod yaml includes the second network definition
+- Whereabouts CNI plugin installed and running
+- The pod yaml includes both network definitions
 
 ```bash
-# Verify first network exists
-kubectl get network-attachment-definitions
+# Verify prerequisites
+kubectl get pods -n kube-system -l name=whereabouts
 
-# Apply the test (includes second network definition)
+# Apply the test (this will create both network definitions)
 kubectl apply -f 02-multi-network-pod.yaml
+
+# Verify network definitions were created
+kubectl get network-attachment-definitions
+kubectl describe network-attachment-definitions test-network-1
+kubectl describe network-attachment-definitions test-network-2
+
+# Wait for pod to be ready
+kubectl wait --for=condition=ready pod/multi-network-test --timeout=60s
+
+# Check pod status and networks
+kubectl describe pod multi-network-test | grep networks
+kubectl logs multi-network-test
+
+# For debugging network issues
+kubectl describe pod multi-network-test
+kubectl logs -n kube-system -l name=whereabouts
 ```
+
+**Expected Output:**
+The pod should show three network interfaces:
+- eth0: Default Kubernetes network
+- net1: From test-network-1 (192.168.1.0/24)
+- net2: From test-network-2 (192.168.2.0/24)
+
+**Troubleshooting:**
+If networks are not attached:
+1. Verify Whereabouts is running:
+   ```bash
+   kubectl get pods -n kube-system -l name=whereabouts
+   kubectl logs -n kube-system -l name=whereabouts
+   ```
+
+2. Check network definitions:
+   ```bash
+   kubectl get network-attachment-definitions -o yaml
+   ```
+
+3. Check CNI configuration:
+   ```bash
+   # On the node running the pod
+   ls /etc/cni/net.d/
+   cat /etc/cni/net.d/*
+   ```
 
 ### 3. Resource Test (`03-resource-test-pod.yaml`)
 **Required Resources:**

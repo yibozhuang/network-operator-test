@@ -1,9 +1,8 @@
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
-  name: test-network-2
-  labels:
-    test: "true"
+  name: test-network-1
+  namespace: default
 spec:
   config: '{
     "cniVersion": "0.3.1",
@@ -11,10 +10,33 @@ spec:
     "master": "eth0",
     "mode": "bridge",
     "ipam": {
-      "type": "host-local",
-      "subnet": "192.168.2.0/24",
-      "rangeStart": "192.168.2.200",
-      "rangeEnd": "192.168.2.216"
+      "type": "whereabouts",
+      "range": "192.168.1.0/24",
+      "exclude": [
+        "192.168.1.1/32",
+        "192.168.1.254/32"
+      ]
+    }
+  }'
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: test-network-2
+  namespace: default
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "macvlan",
+    "master": "eth0",
+    "mode": "bridge",
+    "ipam": {
+      "type": "whereabouts",
+      "range": "192.168.2.0/24",
+      "exclude": [
+        "192.168.2.1/32",
+        "192.168.2.254/32"
+      ]
     }
   }'
 ---
@@ -23,7 +45,7 @@ kind: Pod
 metadata:
   name: multi-network-test
   annotations:
-    k8s.v1.cni.cncf.io/networks: test-network,test-network-2
+    k8s.v1.cni.cncf.io/networks: test-network-1,test-network-2
   labels:
     test: "true"
     scenario: "multi-network"
@@ -31,26 +53,39 @@ spec:
   containers:
   - name: network-test
     image: nicolaka/netshoot
-    command: 
+    command:
       - /bin/bash
       - -c
       - |
         # Print all network interfaces
         echo "=== Network Interfaces ==="
         ip addr show
-        
+
         # Print routing tables
         echo "=== Routing Tables ==="
         ip route show table all
-        
-        # Test connectivity
+
+        # Test connectivity for each network
         echo "=== Testing Network 1 ==="
-        ip addr show net1
+        if ip addr show net1 >/dev/null 2>&1; then
+          ip addr show net1
+          echo "Network 1 IP:"
+          ip -4 addr show net1 | grep inet | awk '{print $2}'
+        else
+          echo "Network 1 (net1) not found"
+        fi
+
         echo "=== Testing Network 2 ==="
-        ip addr show net2
-        
+        if ip addr show net2 >/dev/null 2>&1; then
+          ip addr show net2
+          echo "Network 2 IP:"
+          ip -4 addr show net2 | grep inet | awk '{print $2}'
+        else
+          echo "Network 2 (net2) not found"
+        fi
+
         # Keep container running
         trap : TERM INT; sleep infinity & wait
     securityContext:
       capabilities:
-        add: ["NET_ADMIN"] 
+        add: ["NET_ADMIN"]
