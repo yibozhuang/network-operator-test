@@ -2,110 +2,210 @@
 
 This directory contains various test pods to validate and understand the network-operator functionality in a kind environment. While these pods can't test actual RDMA/hardware functionality, they help understand the operator's behavior and network configuration capabilities.
 
-## Test Scenarios
+## Prerequisites
+
+Before running any test pods, ensure you have the following components installed and configured:
+
+1. **Base Requirements**
+   ```bash
+   # Create kind cluster with multiple nodes
+   kind create cluster --config ../kind-multi-node.yaml
+
+   # Install Network Operator
+   helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+   helm repo update
+   
+   helm install network-operator nvidia/network-operator \
+     -n nvidia-network-operator \
+     --create-namespace \
+     --version v25.4.0 \
+     --wait
+
+   # Install Whereabouts CNI (required for IP address management)
+   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/daemonset-install.yaml
+   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/whereabouts.cni.cncf.io_ippools.yaml
+   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/v0.6.1/doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml
+   ```
+
+2. **Required Custom Resources**
+   ```bash
+   # Deploy NicClusterPolicy (required for all network-related tests)
+   kubectl apply -f ../example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
+
+   # Deploy MacvlanNetwork (required for network interface tests)
+   kubectl apply -f ../example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
+   
+   # Verify resources are ready
+   kubectl get NicClusterPolicy
+   kubectl get MacvlanNetwork
+   kubectl get network-attachment-definitions -A
+   ```
+
+## Test Pod Dependencies
 
 ### 1. Basic Network Test (`01-basic-network-pod.yaml`)
-Tests basic network attachment and configuration:
-- Network interface creation
-- IP address assignment
-- Routing table configuration
+**Required Resources:**
+- NicClusterPolicy (status: ready)
+- MacvlanNetwork (for the test-network attachment)
 
 ```bash
+# Verify prerequisites
+kubectl get NicClusterPolicy
+kubectl get MacvlanNetwork
+kubectl get network-attachment-definitions -A
+
 # Apply the test
 kubectl apply -f 01-basic-network-pod.yaml
-
-# Check pod status
-kubectl get pod basic-network-test
-
-# View network configuration
-kubectl logs basic-network-test
 ```
 
 ### 2. Multi-Network Test (`02-multi-network-pod.yaml`)
-Tests multiple network attachment capabilities:
-- Multiple interface creation
-- Multiple IP assignments
-- Routing between networks
+**Required Resources:**
+- NicClusterPolicy (status: ready)
+- Two network definitions (test-network and test-network-2)
+- The pod yaml includes the second network definition
 
 ```bash
-# Apply the test
+# Verify first network exists
+kubectl get network-attachment-definitions
+
+# Apply the test (includes second network definition)
 kubectl apply -f 02-multi-network-pod.yaml
-
-# Check pod status
-kubectl get pod multi-network-test
-
-# View network configurations
-kubectl logs multi-network-test
-
-# Test specific interface
-kubectl exec -it multi-network-test -- ip addr show net1
-kubectl exec -it multi-network-test -- ip addr show net2
 ```
 
 ### 3. Resource Test (`03-resource-test-pod.yaml`)
-Tests resource allocation and limits:
-- RDMA resource requests
-- GPU resource requests
-- CPU/Memory limits
-- Device discovery
+**Required Resources:**
+- NicClusterPolicy (status: ready)
+- RDMA Device Plugin enabled in NicClusterPolicy
 
 ```bash
+# Verify RDMA resources are available
+kubectl get NicClusterPolicy
+kubectl describe node | grep nvidia.com/rdma
+
 # Apply the test
 kubectl apply -f 03-resource-test-pod.yaml
-
-# Check pod status and resource allocation
-kubectl get pod resource-test
-kubectl describe pod resource-test
-
-# View resource information
-kubectl logs resource-test
 ```
 
 ### 4. Operator Validation (`04-operator-validation-pod.yaml`)
-Continuously monitors operator status and configuration:
-- Operator pod status
-- CRD availability
-- Network plugin configuration
-- Configuration changes
+**Required Resources:**
+- Only requires the operator to be running
+- No additional CRs needed
 
 ```bash
+# Verify operator is running
+kubectl get pods -n nvidia-network-operator
+
 # Apply the test
 kubectl apply -f 04-operator-validation-pod.yaml
-
-# View ongoing validation results
-kubectl logs -f operator-validation
-
-# Check specific components
-kubectl exec -it operator-validation -- ls -l /etc/cni/net.d/
 ```
 
-## Running All Tests
+## Running All Tests in Sequence
 
-To run all tests in sequence:
+Here's the complete sequence to set up and run all tests:
 
 ```bash
-# Create kind cluster with multiple nodes
+# 1. Create cluster and install operator
 kind create cluster --config ../kind-multi-node.yaml
 
-# Deploy network operator
-kubectl apply -k ../deployments/kustomization/base
+helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+helm repo update
 
-# Apply all test pods
-kubectl apply -f ./
+helm install network-operator nvidia/network-operator \
+  -n nvidia-network-operator \
+  --create-namespace \
+  --version v25.4.0 \
+  --wait
 
-# Monitor results
+# 2. Deploy required CRs
+kubectl apply -f ../example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
+kubectl apply -f ../example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
+
+# 3. Wait for resources to be ready
+echo "Waiting for NicClusterPolicy to be ready..."
+kubectl wait --for=condition=ready NicClusterPolicy --all --timeout=300s
+
+echo "Waiting for network attachments to be available..."
+kubectl wait --for=condition=established crd/network-attachment-definitions.k8s.cni.cncf.io --timeout=60s
+
+# 4. Apply test pods in sequence
+kubectl apply -f 01-basic-network-pod.yaml
+kubectl wait --for=condition=ready pod/basic-network-test --timeout=60s
+
+kubectl apply -f 02-multi-network-pod.yaml
+kubectl wait --for=condition=ready pod/multi-network-test --timeout=60s
+
+kubectl apply -f 03-resource-test-pod.yaml
+kubectl wait --for=condition=ready pod/resource-test --timeout=60s
+
+kubectl apply -f 04-operator-validation-pod.yaml
+kubectl wait --for=condition=ready pod/operator-validation --timeout=60s
+
+# 5. Monitor results
 kubectl get pods -w
 ```
 
-## Cleanup
+## Verifying Test Results
 
-To clean up all test resources:
+For each test pod, you can verify the results:
 
 ```bash
-# Delete all test pods
+# Basic Network Test
+kubectl logs basic-network-test
+
+# Multi-Network Test
+kubectl logs multi-network-test
+kubectl exec -it multi-network-test -- ip addr show
+
+# Resource Test
+kubectl logs resource-test
+kubectl describe pod resource-test
+
+# Operator Validation
+kubectl logs -f operator-validation
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Pods Stuck in Pending State**
+   ```bash
+   # Check node resources
+   kubectl describe node
+   # Check for network attachment issues
+   kubectl describe pod <pod-name>
+   ```
+
+2. **Network Attachment Issues**
+   ```bash
+   # Verify network definitions
+   kubectl get network-attachment-definitions -A
+   # Check CNI configuration
+   kubectl get NicClusterPolicy
+   ```
+
+3. **Resource Allocation Issues**
+   ```bash
+   # Check available resources
+   kubectl describe node | grep nvidia.com
+   # Verify device plugin status
+   kubectl get pods -n nvidia-network-operator
+   ```
+
+## Cleanup
+
+```bash
+# Delete test pods
 kubectl delete -f ./
 
-# Delete kind cluster
+# Remove CRs
+kubectl delete -f ../example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
+kubectl delete -f ../example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
+
+# Uninstall operator
+helm uninstall -n nvidia-network-operator network-operator
+
+# Delete cluster
 kind delete cluster --name netop-test-multi
 ```
 
@@ -168,4 +268,4 @@ kind delete cluster --name netop-test-multi
 3. **Resource Problems**
    - Verify NicClusterPolicy
    - Check device plugin status
-   - Validate resource availability 
+   - Validate resource availability

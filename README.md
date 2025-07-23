@@ -29,11 +29,13 @@ Before starting, ensure you have the following tools installed:
 # For macOS users
 brew install kind
 brew install kubectl
+brew install helm  # Added Helm requirement
 brew install docker  # Or Docker Desktop
 
 # Verify installations
 kind --version
 kubectl version
+helm version
 docker --version
 ```
 
@@ -59,48 +61,63 @@ Additional requirements:
    kubectl cluster-info --context kind-netop-test
    ```
 
-3. **Deploy NVIDIA Device Plugin (Optional)**
+3. **Deploy the Network Operator using Helm**
    ```bash
-   # This won't find real devices in kind but helps test integration
-   kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
-   
-   # Verify the plugin deployment
-   kubectl get pods -n kube-system | grep nvidia
-   ```
+   # Add the NVIDIA Networking Helm repository
+   helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+   helm repo update
 
-4. **Deploy the Network Operator**
-   ```bash
-   # Using provided manifests
-   kubectl apply -k deployments/kustomization/base
-   
-   # Alternative quick deployment
-   kubectl apply -f https://raw.githubusercontent.com/Mellanox/network-operator/master/deploy/operator.yaml
-   ```
+   # Get the latest version available
+   helm search repo nvidia/network-operator -l | head -n 5
 
-5. **Verify Operator Components**
-   ```bash
-   # Check operator pods
+   # Install the network operator (includes CRDs)
+   helm install network-operator nvidia/network-operator \
+      -n nvidia-network-operator \
+      --create-namespace \
+      --version v25.4.0 \
+      --wait
+   
+   # Verify operator deployment and CRDs
    kubectl get pods -n nvidia-network-operator
-   
-   # Check Custom Resource Definitions
    kubectl get crds | grep mellanox
-   
-   # Check operator logs
-   kubectl logs -n nvidia-network-operator deploy/network-operator
+
+   # Check operator logs if there are issues
+   kubectl logs -n nvidia-network-operator -l name=network-operator
    ```
 
-6. **Create and Test Custom Resources**
+4. **Deploy NicClusterPolicy**
    ```bash
-   # Apply sample NicClusterPolicy
-   kubectl apply -f config/samples/nic-cluster-policy.yaml
+   # Apply example NicClusterPolicy
+   kubectl apply -f example/crs/mellanox.com_v1alpha1_nicclusterpolicy_cr.yaml
    
-   # Check status
-   kubectl get NicClusterPolicy -A
+   # Verify policy status
+   kubectl get NicClusterPolicy
    kubectl describe NicClusterPolicy
    ```
 
-7. **Clean Up Local Environment**
+5. **Deploy Network Definitions (Optional)**
    ```bash
+   # Apply example MacvlanNetwork
+   kubectl apply -f example/crs/mellanox.com_v1alpha1_macvlannetwork_cr.yaml
+   
+   # Verify network attachment definition
+   kubectl get network-attachment-definitions -A
+   ```
+
+6. **Clean Up**
+   ```bash
+   # Uninstall the operator (this will preserve CRDs by default)
+   helm uninstall -n nvidia-network-operator nvidia-network-operator
+   
+   # Optionally delete CRDs if you want to remove them
+   kubectl delete crd nicclusterpolicies.mellanox.com
+   kubectl delete crd macvlannetworks.mellanox.com
+   kubectl delete crd hostdevicenetworks.mellanox.com
+   kubectl delete crd network-attachment-definitions.k8s.cni.cncf.io
+   
+   # Delete the namespace
+   kubectl delete namespace nvidia-network-operator
+   
    # Delete the kind cluster
    kind delete cluster --name netop-test
    ```
@@ -260,10 +277,10 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
   brew install azure-cli  # For macOS
   # or
   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash  # For Ubuntu/Debian
-  
+
   # Login to Azure
   az login
-  
+
   # Verify subscription
   az account show
   ```
@@ -282,10 +299,10 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
    LOCATION="eastus"        # Make sure this region has NC-series VMs
    CLUSTER_NAME="netop-cluster"
    VM_SIZE="Standard_NC6s_v3"  # Minimum size with Mellanox NICs
-   
+
    # Verify VM size availability
    az vm list-sizes --location $LOCATION | grep $VM_SIZE
-   
+
    # Create resource group
    az group create --name $RESOURCE_GROUP --location $LOCATION
    ```
@@ -299,7 +316,7 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
      --address-prefix 10.0.0.0/16 \
      --subnet-name netop-subnet \
      --subnet-prefix 10.0.1.0/24
-   
+
    # Enable accelerated networking
    SUBNET_ID=$(az network vnet subnet show \
      --resource-group $RESOURCE_GROUP \
@@ -320,13 +337,13 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
      --generate-ssh-keys \
      --subnet $SUBNET_ID \
      --accelerated-networking true
-   
+
    # Get the public IP of the first instance
    INSTANCE_IP=$(az vmss list-instance-public-ips \
      --resource-group $RESOURCE_GROUP \
      --name netop-vmss \
      --query "[0].ipAddress" -o tsv)
-   
+
    # SSH into the instance
    ssh azureuser@$INSTANCE_IP
    ```
@@ -335,7 +352,7 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
    ```bash
    # SSH into each VM and run:
    curl -sfL https://get.k3s.io | sh -
-   
+
    # Or for kubeadm:
    curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
    sudo apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"
@@ -347,12 +364,12 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
    ```bash
    # Download MLNX_OFED
    wget https://content.mellanox.com/ofed/MLNX_OFED-5.4-3.1.0.0/MLNX_OFED_LINUX-5.4-3.1.0.0-ubuntu20.04-x86_64.tgz
-   
+
    # Extract and install
    tar xzf MLNX_OFED_LINUX-5.4-3.1.0.0-ubuntu20.04-x86_64.tgz
    cd MLNX_OFED_LINUX-5.4-3.1.0.0-ubuntu20.04-x86_64
    sudo ./mlnxofedinstall --force
-   
+
    # Verify installation
    sudo ibstat
    ```
@@ -361,7 +378,7 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
    ```bash
    # Apply operator manifests
    kubectl apply -k deployments/kustomization/base
-   
+
    # Verify deployment
    kubectl get pods -n nvidia-network-operator
    ```
@@ -398,7 +415,7 @@ watch -n 1 'kubectl get pods,NicClusterPolicy,MacvlanNetwork -A'
    # Check RDMA devices
    kubectl get pods -n nvidia-network-operator
    kubectl describe node | grep nvidia.com/gpu
-   
+
    # Test with a sample RDMA-aware pod
    kubectl apply -f examples/rdma-test-pod.yaml
    ```
@@ -418,7 +435,7 @@ Oracle Cloud offers a more straightforward setup with their GPU shapes (BM.GPU.B
   ```bash
   # Install OCI CLI
   bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)"
-  
+
   # Configure CLI
   oci setup config
   ```
@@ -441,10 +458,10 @@ Oracle Cloud offers a more straightforward setup with their GPU shapes (BM.GPU.B
    ```bash
    # SSH into the instance
    ssh opc@<instance-ip>
-   
+
    # Install k3s (simpler option)
    curl -sfL https://get.k3s.io | sh -
-   
+
    # Get kubeconfig
    sudo cat /etc/rancher/k3s/k3s.yaml
    ```
@@ -530,4 +547,4 @@ Common issues and solutions:
 - [NVIDIA Device Plugin](https://github.com/NVIDIA/k8s-device-plugin)
 - [Mellanox OFED Documentation](https://docs.nvidia.com/networking/display/OFEDv525400/)
 - [Azure InfiniBand Documentation](https://learn.microsoft.com/en-us/azure/virtual-machines/infini-band)
-- [kind Documentation](https://kind.sigs.k8s.io/) 
+- [kind Documentation](https://kind.sigs.k8s.io/)
