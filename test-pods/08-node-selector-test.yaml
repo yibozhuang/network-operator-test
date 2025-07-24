@@ -1,0 +1,67 @@
+apiVersion: mellanox.com/v1alpha1
+kind: MacvlanNetwork
+metadata:
+  name: selector-test-net
+spec:
+  networkNamespace: "default"
+  master: "eth0"
+  mode: "bridge"
+  ipam: |
+    {
+      "type": "whereabouts",
+      "range": "192.168.9.0/24"
+    }
+  nodeSelector:
+    matchLabels:
+      network-type: "fast"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: label-nodes
+  labels:
+    test: "true"
+    scenario: "node-selector"
+spec:
+  serviceAccountName: operator-validator
+  containers:
+  - name: node-labeler
+    image: bitnami/kubectl:latest
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # Label some nodes
+        echo "=== Labeling nodes ==="
+        for node in $(kubectl get nodes -o name | tail -n 1); do
+          echo "Labeling $node with network-type=fast"
+          kubectl label $node network-type=fast
+        done
+        
+        # Create test pod
+        echo "=== Creating test pod ==="
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: network-test-pod
+          annotations:
+            k8s.v1.cni.cncf.io/networks: selector-test-net
+        spec:
+          containers:
+          - name: network-test
+            image: nicolaka/netshoot
+            command: ["/bin/sh", "-c", "trap : TERM INT; sleep infinity & wait"]
+          nodeSelector:
+            network-type: "fast"
+        EOF
+        
+        # Monitor pod placement and network attachment
+        echo "=== Monitoring pod ==="
+        while true; do
+          echo "Pod Status:"
+          kubectl get pod network-test-pod -o wide
+          echo "Network Status:"
+          kubectl get network-attachment-definitions
+          sleep 30
+        done 

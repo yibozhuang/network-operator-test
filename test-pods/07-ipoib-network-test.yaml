@@ -1,0 +1,55 @@
+apiVersion: mellanox.com/v1alpha1
+kind: IPoIBNetwork
+metadata:
+  name: test-ipoib-network
+spec:
+  networkNamespace: "default"
+  master: "ib0"  # Note: This interface won't exist in kind
+  ipam: |
+    {
+      "type": "whereabouts",
+      "range": "192.168.8.0/24",
+      "exclude": [
+        "192.168.8.1/32",
+        "192.168.8.254/32"
+      ]
+    }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ipoib-test
+  annotations:
+    k8s.v1.cni.cncf.io/networks: test-ipoib-network
+  labels:
+    test: "true"
+    scenario: "ipoib-network"
+spec:
+  containers:
+  - name: network-test
+    image: nicolaka/netshoot
+    command: 
+      - /bin/bash
+      - -c
+      - |
+        # Print network interfaces
+        echo "=== Network Interfaces ==="
+        ip addr show
+        
+        # Print IPoIB specific info
+        echo "=== IPoIB Info ==="
+        if [ -d "/sys/class/infiniband" ]; then
+          ls -l /sys/class/infiniband/
+          for dev in $(ls /sys/class/infiniband/); do
+            echo "Device: $dev"
+            cat /sys/class/infiniband/$dev/ports/1/state
+          done
+        else
+          echo "No InfiniBand devices found (expected in kind)"
+        fi
+        
+        # Keep container running
+        trap : TERM INT; sleep infinity & wait
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"] 

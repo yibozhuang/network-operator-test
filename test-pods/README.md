@@ -666,6 +666,104 @@ kubectl get pods -n nvidia-network-operator
 kubectl apply -f 04-operator-validation-pod.yaml
 ```
 
+### Additional Test Scenarios in kind
+
+Beyond the basic functionality, the following aspects can also be tested in kind:
+
+1. **HostDeviceNetwork CR** (`05-hostdevice-network-test.yaml`)
+   - Network attachment definition creation
+   - Host device network configuration
+   - Network interface management
+   - IPAM configuration
+   Note: While the CR functionality can be tested, actual host devices might not be available in kind.
+
+2. **Configuration Updates and Validation** (`06-config-update-test.yaml`)
+   Tests the operator's handling of:
+   - Invalid configurations
+   - Configuration updates
+   - Error conditions
+   - Status reporting
+   - Validation webhooks
+   - Resource updates
+
+3. **Operator Behavior Testing**
+   The following can be tested without real hardware:
+   - CR validation logic
+   - Status updates and conditions
+   - Event generation
+   - Error handling
+   - Resource cleanup
+   - Configuration persistence
+
+4. **Network Plugin Integration**
+   Can test integration with:
+   - Multus CNI
+   - Whereabouts IPAM
+   - Standard CNI plugins
+   - Network attachment definitions
+
+5. **Operator Upgrade Testing**
+   Can test:
+   - CRD version compatibility
+   - Configuration migration
+   - Resource version updates
+   - API compatibility
+
+### Example Test Scenarios
+
+1. **Testing HostDeviceNetwork**:
+   ```bash
+   # Apply host device network test
+   kubectl apply -f 05-hostdevice-network-test.yaml
+
+   # Verify network attachment definition
+   kubectl get network-attachment-definitions
+   ```
+
+2. **Testing Configuration Updates**:
+   ```bash
+   # Apply configuration test
+   kubectl apply -f 06-config-update-test.yaml
+
+   # Monitor test results
+   kubectl logs -f config-update-test
+   ```
+
+3. **Testing Error Handling**:
+   ```bash
+   # Create invalid configuration
+   kubectl apply -f test-pods/examples/invalid-config.yaml
+
+   # Check operator's response
+   kubectl get events --field-selector type=Warning
+   ```
+
+### What to Look For
+
+1. **Configuration Validation**:
+   - Proper rejection of invalid configurations
+   - Meaningful error messages
+   - Appropriate status updates
+   - Event generation
+
+2. **Update Handling**:
+   - Graceful handling of configuration changes
+   - Proper status updates during changes
+   - Resource recreation when needed
+   - Configuration persistence
+
+3. **Error Recovery**:
+   - Recovery from invalid states
+   - Proper error reporting
+   - Status condition updates
+   - Event generation
+
+4. **Resource Management**:
+   - Proper creation of dependent resources
+   - Cleanup of resources
+   - Resource version handling
+   - Owner reference management
+
 ## Running All Tests in Sequence
 
 Here's the complete sequence to set up and run all tests:
@@ -836,3 +934,87 @@ kind delete cluster --name netop-test-multi
    - Verify NicClusterPolicy
    - Check device plugin status
    - Validate resource availability
+
+### Additional Network Operator Features
+
+The following additional features can be tested in kind:
+
+1. **IPoIB Networks** (`07-ipoib-network-test.yaml`)
+   - IPoIBNetwork CR validation
+   - Network attachment creation
+   - IPAM configuration
+   Note: While the CR can be tested, actual IPoIB functionality requires real InfiniBand hardware.
+
+2. **Node Selector Support** (`08-node-selector-test.yaml`)
+   - Network targeting using node labels
+   - Network attachment restrictions
+   - Node selection validation
+   - Label-based network distribution
+
+3. **Operator Metrics** (`09-metrics-test.yaml`)
+   - Prometheus metrics exposure
+   - Reconciliation metrics
+   - Error metrics
+   - Build information
+
+### Feature-Specific Testing
+
+1. **IPoIB Network Testing**:
+   ```bash
+   # Apply IPoIB network test
+   kubectl apply -f 07-ipoib-network-test.yaml
+
+   # Check network creation
+   kubectl get ipoibnetworks
+   kubectl get network-attachment-definitions
+   ```
+
+2. **Node Selector Testing**:
+   ```bash
+   # Apply node selector test
+   kubectl apply -f 08-node-selector-test.yaml
+
+   # Verify network restrictions
+   kubectl get macvlannetwork selector-test-net -o yaml
+   ```
+
+3. **Metrics Testing**:
+   ```bash
+   # Apply metrics test
+   kubectl apply -f 09-metrics-test.yaml
+
+   # View metrics data
+   kubectl logs -f metrics-test
+   ```
+
+### What Can Be Tested
+
+1. **IPoIB Networks**:
+   - CR validation
+   - Network definition creation
+   - IPAM configuration
+   - Status reporting
+   Note: Actual IPoIB functionality requires real hardware
+
+2. **Node Selector Feature**:
+   - Network restriction to specific nodes
+   - Label-based network distribution
+   - Node selection validation
+   - Network attachment enforcement
+
+3. **Operator Metrics**:
+   - Build information
+   - Reconciliation counters
+   - Error metrics
+   - Performance metrics
+
+### Testing Matrix
+
+| Feature | Can Test in kind | Requires Hardware | Notes |
+|---------|------------------|-------------------|--------|
+| MacvlanNetwork | ✅ Full | No | Network attachment only |
+| HostDeviceNetwork | ✅ Partial | No | No real devices |
+| IPoIBNetwork | ✅ Partial | Yes | No IB hardware |
+| Node Selectors | ✅ Full | No | Full functionality |
+| RDMA Resources | ❌ No | Yes | Requires RDMA hardware |
+| Operator Metrics | ✅ Full | No | Full functionality |

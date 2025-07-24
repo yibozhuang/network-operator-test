@@ -1,0 +1,65 @@
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: hostdev-test-net
+  namespace: default
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "host-device",
+    "device": "eth1",
+    "ipam": {
+      "type": "whereabouts",
+      "range": "192.168.4.0/24",
+      "exclude": [
+        "192.168.4.1/32",
+        "192.168.4.254/32"
+      ],
+      "kubernetes": {
+        "kubeconfig": "/etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig"
+      }
+    }
+  }'
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hostdevice-network-test
+  annotations:
+    k8s.v1.cni.cncf.io/networks: hostdev-test-net
+  labels:
+    test: "true"
+    scenario: "hostdevice-network"
+spec:
+  containers:
+  - name: network-test
+    image: nicolaka/netshoot
+    command: 
+      - /bin/bash
+      - -c
+      - |
+        # Print network interfaces
+        echo "=== Network Interfaces ==="
+        ip addr show
+        
+        # Print routing table
+        echo "=== Routing Table ==="
+        ip route show table all
+        
+        # Test additional network interface
+        echo "=== Testing Host Device Network ==="
+        if ip addr show net1 >/dev/null 2>&1; then
+          ip addr show net1
+          echo "Host Device Network IP:"
+          ip -4 addr show net1 | grep inet | awk '{print $2}'
+        else
+          echo "Host device interface (net1) not found"
+          echo "Available interfaces:"
+          ip link show
+        fi
+        
+        # Keep container running
+        trap : TERM INT; sleep infinity & wait
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"] 

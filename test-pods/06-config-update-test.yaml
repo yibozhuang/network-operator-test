@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-test-script
+data:
+  test.sh: |
+    #!/bin/bash
+    
+    test_config_validation() {
+      echo "=== Testing Configuration Validation ==="
+      
+      # Test 1: Invalid IPAM configuration
+      echo "Test 1: Invalid IPAM configuration"
+      cat <<EOF | kubectl apply -f - || echo "Expected failure: Invalid IPAM config rejected"
+      apiVersion: mellanox.com/v1alpha1
+      kind: MacvlanNetwork
+      metadata:
+        name: invalid-ipam-test
+      spec:
+        networkNamespace: "default"
+        master: "eth0"
+        mode: "bridge"
+        ipam: |
+          {
+            "type": "invalid-type"
+          }
+      EOF
+      
+      # Test 2: Invalid network mode
+      echo "Test 2: Invalid network mode"
+      cat <<EOF | kubectl apply -f - || echo "Expected failure: Invalid mode rejected"
+      apiVersion: mellanox.com/v1alpha1
+      kind: MacvlanNetwork
+      metadata:
+        name: invalid-mode-test
+      spec:
+        networkNamespace: "default"
+        master: "eth0"
+        mode: "invalid-mode"
+        ipam: |
+          {
+            "type": "whereabouts",
+            "range": "192.168.5.0/24"
+          }
+      EOF
+    }
+    
+    test_config_updates() {
+      echo "=== Testing Configuration Updates ==="
+      
+      # Create initial network
+      cat <<EOF | kubectl apply -f -
+      apiVersion: mellanox.com/v1alpha1
+      kind: MacvlanNetwork
+      metadata:
+        name: update-test-net
+      spec:
+        networkNamespace: "default"
+        master: "eth0"
+        mode: "bridge"
+        mtu: 1500
+        ipam: |
+          {
+            "type": "whereabouts",
+            "range": "192.168.5.0/24"
+          }
+      EOF
+      
+      echo "Waiting for network to be ready..."
+      sleep 5
+      
+      # Update MTU
+      echo "Updating MTU..."
+      kubectl patch macvlannetwork update-test-net --type=merge -p '{"spec":{"mtu":9000}}'
+      
+      # Update IPAM range
+      echo "Updating IPAM range..."
+      kubectl patch macvlannetwork update-test-net --type=merge -p "{\"spec\":{\"ipam\":\"{\\\"type\\\": \\\"whereabouts\\\", \\\"range\\\": \\\"192.168.6.0/24\\\"}\"}}"
+    }
+    
+    test_error_handling() {
+      echo "=== Testing Error Handling ==="
+      
+      # Test non-existent interface
+      echo "Testing non-existent interface..."
+      cat <<EOF | kubectl apply -f -
+      apiVersion: mellanox.com/v1alpha1
+      kind: MacvlanNetwork
+      metadata:
+        name: error-test-net
+      spec:
+        networkNamespace: "default"
+        master: "nonexistent0"
+        mode: "bridge"
+        ipam: |
+          {
+            "type": "whereabouts",
+            "range": "192.168.7.0/24"
+          }
+      EOF
+      
+      echo "Checking error status..."
+      kubectl get macvlannetwork error-test-net -o yaml | grep -A 5 "status:"
+    }
+    
+    # Run tests in sequence
+    while true; do
+      echo "============================================="
+      echo "Starting configuration tests at $(date)"
+      echo "============================================="
+      
+      test_config_validation
+      echo
+      test_config_updates
+      echo
+      test_error_handling
+      
+      echo "============================================="
+      echo "Tests completed at $(date)"
+      echo "============================================="
+      echo "Waiting 60 seconds before next test cycle..."
+      sleep 60
+    done
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: config-update-test
+  labels:
+    test: "true"
+    scenario: "config-update"
+spec:
+  serviceAccountName: operator-validator
+  containers:
+  - name: tester
+    image: bitnami/kubectl:latest
+    command: ["/scripts/test.sh"]
+    volumeMounts:
+    - name: test-script
+      mountPath: /scripts
+  volumes:
+  - name: test-script
+    configMap:
+      name: config-test-script
+      defaultMode: 0755 
