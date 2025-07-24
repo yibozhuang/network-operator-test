@@ -1,0 +1,185 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-device-plugin-code
+  namespace: kube-system
+data:
+  plugin.go: |
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "net"
+        "os"
+        "path"
+        "time"
+        pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+        "google.golang.org/grpc"
+    )
+
+    const (
+        resourceName = "nvidia.com/rdma"
+        socketPath  = "/var/lib/kubelet/device-plugins/"
+    )
+
+    type MockDevicePlugin struct{}
+
+    func (m *MockDevicePlugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
+        return &pluginapi.DevicePluginOptions{}, nil
+    }
+
+    func (m *MockDevicePlugin) ListAndWatch(empty *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
+        devices := []*pluginapi.Device{
+            {ID: "mock-rdma-0", Health: pluginapi.Healthy},
+            {ID: "mock-rdma-1", Health: pluginapi.Healthy},
+        }
+        
+        if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
+            return err
+        }
+
+        // Keep the stream alive
+        ticker := time.NewTicker(time.Second)
+        for {
+            select {
+            case <-ticker.C:
+                if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
+                    return err
+                }
+            }
+        }
+    }
+
+    func (m *MockDevicePlugin) GetPreferredAllocation(context.Context, *pluginapi.PreferredAllocationRequest) (*pluginapi.PreferredAllocationResponse, error) {
+        return &pluginapi.PreferredAllocationResponse{}, nil
+    }
+
+    func (m *MockDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+        responses := &pluginapi.AllocateResponse{
+            ContainerResponses: make([]*pluginapi.ContainerAllocateResponse, len(reqs.ContainerRequests)),
+        }
+        
+        for i := range reqs.ContainerRequests {
+            responses.ContainerResponses[i] = &pluginapi.ContainerAllocateResponse{}
+        }
+        
+        return responses, nil
+    }
+
+    func (m *MockDevicePlugin) PreStartContainer(context.Context, *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
+        return &pluginapi.PreStartContainerResponse{}, nil
+    }
+
+    func main() {
+        fmt.Printf("Starting RDMA device plugin...\n")
+        
+        socketFile := path.Join(socketPath, "mock-rdma.sock")
+        os.Remove(socketFile)
+
+        sock, err := net.Listen("unix", socketFile)
+        if err != nil {
+            fmt.Printf("Error creating socket: %v\n", err)
+            os.Exit(1)
+        }
+
+        server := grpc.NewServer()
+        pluginapi.RegisterDevicePluginServer(server, &MockDevicePlugin{})
+
+        go server.Serve(sock)
+
+        // Wait for the socket to be created
+        time.Sleep(time.Second)
+
+        // Register with kubelet
+        conn, err := grpc.Dial("unix:///var/lib/kubelet/device-plugins/kubelet.sock", grpc.WithInsecure())
+        if err != nil {
+            fmt.Printf("Error connecting to kubelet: %v\n", err)
+            os.Exit(1)
+        }
+        defer conn.Close()
+
+        client := pluginapi.NewRegistrationClient(conn)
+        req := &pluginapi.RegisterRequest{
+            Version:      pluginapi.Version,
+            Endpoint:     path.Base(socketFile),
+            ResourceName: resourceName,
+        }
+
+        _, err = client.Register(context.Background(), req)
+        if err != nil {
+            fmt.Printf("Error registering with kubelet: %v\n", err)
+            os.Exit(1)
+        }
+
+        fmt.Printf("Device plugin registered successfully\n")
+        
+        // Keep the plugin running
+        select {}
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mock-rdma-device-plugin
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: mock-rdma-device-plugin
+  template:
+    metadata:
+      labels:
+        name: mock-rdma-device-plugin
+    spec:
+      initContainers:
+      - name: build-plugin
+        image: golang:1.20-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -ex
+          cd /build
+          cat > go.mod <<EOF
+          module mock-device-plugin
+          go 1.20
+          require (
+            k8s.io/kubelet v0.28.0
+            google.golang.org/grpc v1.57.0
+          )
+          EOF
+          go mod tidy
+          CGO_ENABLED=0 GOOS=linux go build -o /plugin/device-plugin plugin.go
+        volumeMounts:
+        - name: plugin-code
+          mountPath: /build/plugin.go
+          subPath: plugin.go
+        - name: plugin-bin
+          mountPath: /plugin
+      containers:
+      - name: device-plugin
+        image: alpine:3.18
+        command: ["/plugin/device-plugin"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: plugin-bin
+          mountPath: /plugin
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+      - name: plugin-code
+        configMap:
+          name: mock-device-plugin-code
+      - name: plugin-bin
+        emptyDir: {}
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule 

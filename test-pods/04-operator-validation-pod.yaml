@@ -1,124 +1,4 @@
 apiVersion: v1
-kind: Pod
-metadata:
-  name: operator-validation
-  labels:
-    test: "true"
-    scenario: "operator-validation"
-spec:
-  containers:
-  - name: validation-test
-    image: nicolaka/netshoot
-    command:
-      - /bin/bash
-      - -c
-      - |
-        # Function to check operator status
-        check_operator() {
-          echo "=== Checking Operator Status ==="
-          kubectl get pods -n nvidia-network-operator -o wide
-          echo
-          echo "Operator Logs:"
-          kubectl logs -n nvidia-network-operator -l app.kubernetes.io/name=network-operator --tail=20
-        }
-        
-        # Function to check CRDs
-        check_crds() {
-          echo "=== Checking CRDs ==="
-          echo "NicClusterPolicy CRD:"
-          kubectl get crd nicclusterpolicies.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
-          
-          echo "MacvlanNetwork CRD:"
-          kubectl get crd macvlannetworks.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
-          
-          echo "HostDeviceNetwork CRD:"
-          kubectl get crd hostdevicenetworks.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
-          
-          echo "NetworkAttachmentDefinition CRD:"
-          kubectl get crd network-attachment-definitions.k8s.cni.cncf.io -o jsonpath='{.spec.versions[*].name}{"\n"}'
-        }
-        
-        # Function to check network plugins
-        check_plugins() {
-          echo "=== Checking Network Plugins ==="
-          echo "CNI Plugins in /opt/cni/bin/:"
-          ls -l /etc/cni/net.d/
-          
-          echo
-          echo "Network Attachment Definitions:"
-          kubectl get network-attachment-definitions --all-namespaces -o wide
-          
-          echo
-          echo "Multus Status:"
-          kubectl get pods -n kube-system -l app=multus -o wide
-          
-          echo
-          echo "Whereabouts Status:"
-          kubectl get pods -n kube-system -l name=whereabouts -o wide
-        }
-        
-        # Function to check resources
-        check_resources() {
-          echo "=== Checking Node Resources ==="
-          kubectl get nodes -o custom-columns=NAME:.metadata.name,RDMA:.status.allocatable.\'nvidia\.com/rdma\'
-          
-          echo
-          echo "Resource Quotas:"
-          kubectl get resourcequota --all-namespaces
-        }
-        
-        # Function to check policies
-        check_policies() {
-          echo "=== Checking Policies ==="
-          echo "NicClusterPolicies:"
-          kubectl get NicClusterPolicy -o wide
-          
-          echo
-          echo "Latest Events:"
-          kubectl get events --field-selector type=Warning --sort-by='.lastTimestamp' | tail -n 5
-        }
-        
-        # Main monitoring loop
-        while true; do
-          echo "============================================="
-          echo "Starting validation checks at $(date)"
-          echo "============================================="
-          
-          check_operator
-          echo
-          check_crds
-          echo
-          check_plugins
-          echo
-          check_resources
-          echo
-          check_policies
-          
-          echo "============================================="
-          echo "Checks completed at $(date)"
-          echo "============================================="
-          echo "Waiting 30 seconds before next check..."
-          sleep 30
-        done
-    securityContext:
-      capabilities:
-        add: ["NET_ADMIN"]
-    volumeMounts:
-    - name: cni-conf
-      mountPath: /etc/cni/net.d
-    - name: kubeconfig
-      mountPath: /root/.kube/config
-      subPath: config
-  volumes:
-  - name: cni-conf
-    hostPath:
-      path: /etc/cni/net.d
-  - name: kubeconfig
-    secret:
-      secretName: kubeconfig-secret
-  serviceAccountName: operator-validator
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: operator-validator
@@ -137,6 +17,9 @@ rules:
 - apiGroups: ["k8s.cni.cncf.io"]
   resources: ["network-attachment-definitions"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -149,4 +32,122 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: operator-validator
-  apiGroup: rbac.authorization.k8s.io 
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: validation-scripts
+data:
+  check.sh: |
+    #!/bin/sh
+    
+    check_operator() {
+      echo "=== Checking Operator Status ==="
+      kubectl get pods -n nvidia-network-operator -o wide
+      echo
+      echo "Operator Logs:"
+      kubectl logs -n nvidia-network-operator -l app.kubernetes.io/name=network-operator --tail=20
+    }
+    
+    check_crds() {
+      echo "=== Checking CRDs ==="
+      echo "NicClusterPolicy CRD:"
+      kubectl get crd nicclusterpolicies.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
+      
+      echo "MacvlanNetwork CRD:"
+      kubectl get crd macvlannetworks.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
+      
+      echo "HostDeviceNetwork CRD:"
+      kubectl get crd hostdevicenetworks.mellanox.com -o jsonpath='{.spec.versions[*].name}{"\n"}'
+    }
+    
+    check_resources() {
+      echo "=== Checking Node Resources ==="
+      kubectl get nodes -o custom-columns=NAME:.metadata.name,RDMA:.status.allocatable.nvidia\\\.com/rdma
+      
+      echo
+      echo "=== Checking RDMA Pod Resources ==="
+      kubectl get pods -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,RDMA:.spec.containers[*].resources.requests.nvidia\\\.com/rdma
+    }
+    
+    check_network_plugins() {
+      echo "=== Checking Network Plugins ==="
+      echo "Network Attachment Definitions:"
+      kubectl get network-attachment-definitions --all-namespaces -o wide
+      
+      echo
+      echo "Multus Status:"
+      kubectl get pods -n kube-system -l app=multus -o wide
+      
+      echo
+      echo "Whereabouts Status:"
+      kubectl get pods -n kube-system -l name=whereabouts -o wide
+    }
+    
+    check_policies() {
+      echo "=== Checking NicClusterPolicies ==="
+      kubectl get NicClusterPolicy
+      
+      echo
+      echo "Policy Details:"
+      kubectl get NicClusterPolicy -o yaml | grep -A 5 "status:"
+      
+      echo
+      echo "Latest Events:"
+      kubectl get events --field-selector type=Warning --sort-by='.lastTimestamp' | tail -n 5
+    }
+    
+    while true; do
+      echo "============================================="
+      echo "Starting validation checks at $(date)"
+      echo "============================================="
+      
+      check_operator
+      echo
+      check_crds
+      echo
+      check_resources
+      echo
+      check_network_plugins
+      echo
+      check_policies
+      
+      echo "============================================="
+      echo "Checks completed at $(date)"
+      echo "============================================="
+      echo "Waiting 30 seconds before next check..."
+      sleep 30
+    done
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: operator-validation
+  labels:
+    test: "true"
+    scenario: "operator-validation"
+spec:
+  serviceAccountName: operator-validator
+  containers:
+  - name: validator
+    image: alpine:3.18
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      # Install kubectl
+      apk add --no-cache curl
+      curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      chmod +x kubectl
+      mv kubectl /usr/local/bin/
+      
+      # Run the validation script
+      /scripts/check.sh
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+  volumes:
+  - name: scripts
+    configMap:
+      name: validation-scripts
+      defaultMode: 0755 

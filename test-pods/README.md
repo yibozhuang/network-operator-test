@@ -1,6 +1,233 @@
 # Network Operator Test Pods
 
-This directory contains various test pods to validate and understand the network-operator functionality in a kind environment. While these pods can't test actual RDMA/hardware functionality, they help understand the operator's behavior and network configuration capabilities.
+This directory contains various test pods to validate and understand the network-operator functionality. Some components can be tested in kind, while others require real hardware.
+
+## Testing Limitations in kind
+
+### What Can Be Tested in kind
+1. **MacvlanNetwork CR**:
+   - Network attachment creation
+   - IP address management
+   - Multi-network configuration
+   - Network isolation
+   - Multus CNI integration
+   - Whereabouts IPAM functionality
+
+2. **Operator Core**:
+   - CRD installation
+   - CR validation
+   - Basic operator functionality
+   - Status reporting
+   - Event generation
+
+### What Cannot Be Tested in kind
+1. **NicClusterPolicy CR** (requires real hardware):
+   - OFED driver installation (requires real Mellanox NICs)
+   - RDMA device discovery and configuration
+   - SR-IOV configuration
+   - Real RDMA resource allocation
+   - Hardware-specific features
+
+2. **Hardware Features**:
+   - Actual RDMA communication
+   - SR-IOV virtual function creation
+   - Hardware offloading
+   - Real network performance
+   - Device-specific functionality
+
+### Test Pod Capabilities in kind
+
+1. **Basic Network Test (`01-basic-network-pod.yaml`)**
+   - ✅ Can test: Network attachment, IP allocation, basic connectivity
+   - ❌ Cannot test: RDMA functionality, hardware offloading
+
+2. **Multi-Network Test (`02-multi-network-pod.yaml`)**
+   - ✅ Can test: Multiple network attachments, IP allocation, network isolation
+   - ❌ Cannot test: RDMA over multiple interfaces, hardware-based isolation
+
+3. **Resource Test (`03-resource-test-pod.yaml`)**
+   - ⚠️ Limited testing only:
+     - Can verify resource definition and request workflow
+     - Cannot actually allocate or use RDMA resources
+     - Mock device plugin can simulate resource availability
+     - No real RDMA functionality available
+
+4. **Operator Validation (`04-operator-validation-pod.yaml`)**
+   - ✅ Can test: Operator deployment, CRD installation, CR validation
+   - ⚠️ Partial testing: NicClusterPolicy status monitoring
+   - ❌ Cannot test: Real hardware status, OFED driver status
+
+### Recommended Testing Approach
+
+1. **Local Testing in kind**:
+   ```bash
+   # Test network attachment functionality
+   kubectl apply -f 01-basic-network-pod.yaml
+   kubectl apply -f 02-multi-network-pod.yaml
+
+   # Monitor operator functionality
+   kubectl apply -f 04-operator-validation-pod.yaml
+   ```
+
+2. **Hardware Testing (requires real cluster with Mellanox NICs)**:
+   ```bash
+   # Apply NicClusterPolicy first
+   kubectl apply -f path/to/nicclusterpolicy.yaml
+
+   # Wait for OFED and device plugins
+   kubectl -n nvidia-network-operator wait --for=condition=ready pod -l app=nvidia-network-operator
+
+   # Then test RDMA functionality
+   kubectl apply -f 03-resource-test-pod.yaml
+   ```
+
+### Understanding NicClusterPolicy in kind
+
+When applying NicClusterPolicy in kind:
+1. The operator will accept and validate the CR
+2. Status will be updated
+3. But hardware-dependent components will fail:
+   - OFED driver pods will fail to start
+   - Device plugin won't find any devices
+   - No RDMA resources will be available
+
+Example status in kind:
+```yaml
+status:
+  conditions:
+    - lastTransitionTime: "2023-07-23T12:34:56Z"
+      message: "No supported devices found"
+      reason: "NoDevicesFound"
+      status: "False"
+      type: "Ready"
+```
+
+## Test Pod Overview
+
+### 1. Basic Network Test (`01-basic-network-pod.yaml`)
+**Purpose**: Tests basic network attachment and configuration capabilities.
+
+**Components Tested**:
+- MacvlanNetwork CRD controller
+- Network Attachment Definition creation
+- Multus CNI integration
+- Whereabouts IPAM functionality
+
+**What it validates**:
+- Network interface creation
+- IP address assignment
+- Basic network connectivity
+- Network configuration application
+
+### 2. Multi-Network Test (`02-multi-network-pod.yaml`)
+**Purpose**: Tests multiple network attachment capabilities and network isolation.
+
+**Components Tested**:
+- Multiple MacvlanNetwork instances
+- Multiple Network Attachment Definitions
+- Multus CNI multi-network capability
+- Whereabouts IPAM across multiple networks
+
+**What it validates**:
+- Multiple interface creation
+- Network isolation
+- Concurrent IP management
+- Cross-network routing
+
+### 3. Resource Test (`03-resource-test-pod.yaml`)
+**Purpose**: Tests RDMA resource allocation and management.
+
+**Components Tested**:
+- NicClusterPolicy RDMA configuration
+- RDMA shared device plugin
+- Kubernetes resource management
+- Device plugin framework integration
+
+**What it validates**:
+- RDMA resource availability
+- Resource allocation
+- Resource limits enforcement
+- Device plugin functionality
+
+### 4. Operator Validation (`04-operator-validation-pod.yaml`)
+**Purpose**: Monitors overall operator health and component status.
+
+**Components Tested**:
+- Network Operator core functionality
+- All CRD controllers
+- Resource status
+- Network plugin health
+- Policy configurations
+
+**What it validates**:
+- Operator deployment status
+- CRD availability and versions
+- Resource distribution
+- Plugin health
+- Policy application
+
+## Component Interaction Diagram
+
+```mermaid
+graph TD
+    NO[Network Operator] --> NCP[NicClusterPolicy Controller]
+    NO --> MV[MacvlanNetwork Controller]
+    NO --> HD[HostDeviceNetwork Controller]
+
+    NCP --> RDP[RDMA Device Plugin]
+    NCP --> SDP[SR-IOV Device Plugin]
+
+    MV --> NAD[Network Attachment Definition]
+    HD --> NAD
+
+    NAD --> MC[Multus CNI]
+    MC --> WA[Whereabouts IPAM]
+
+    subgraph "Test Coverage"
+        TP1[Test Pod 1] -.-> MV
+        TP1 -.-> MC
+        TP1 -.-> WA
+
+        TP2[Test Pod 2] -.-> MV
+        TP2 -.-> MC
+        TP2 -.-> WA
+
+        TP3[Test Pod 3] -.-> NCP
+        TP3 -.-> RDP
+
+        TP4[Test Pod 4] -.-> NO
+        TP4 -.-> NCP
+        TP4 -.-> MV
+        TP4 -.-> HD
+    end
+```
+
+## Test Dependencies
+
+Each test pod requires specific components to be available:
+
+1. **Basic Network Test**:
+   - Network Operator
+   - Multus CNI
+   - Whereabouts CNI
+   - MacvlanNetwork CRD
+
+2. **Multi-Network Test**:
+   - All Basic Network Test requirements
+   - Multiple network support in Multus
+   - Multiple IP pools in Whereabouts
+
+3. **Resource Test**:
+   - Network Operator
+   - NicClusterPolicy CRD
+   - RDMA device plugin
+   - Mock RDMA resources (for kind)
+
+4. **Operator Validation**:
+   - Network Operator
+   - All CRDs
+   - RBAC permissions
+   - Monitoring access
 
 ## Prerequisites
 
@@ -23,7 +250,7 @@ Before running any test pods, ensure you have the following components installed
        aarch64|arm64) ARCH="arm64" ;;
        *) echo "Unsupported architecture: ${ARCH}"; exit 1 ;;
    esac
-   
+
    for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
      echo "Installing CNI plugins on node ${node}"
      docker exec ${node} mkdir -p /opt/cni/bin
@@ -35,7 +262,7 @@ Before running any test pods, ensure you have the following components installed
    # Install Network Operator
    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
    helm repo update
-   
+
    helm install network-operator nvidia/network-operator \
      -n nvidia-network-operator \
      --create-namespace \
@@ -123,6 +350,149 @@ If you encounter errors when applying the CRs:
    - Check that all required fields in CRs are properly formatted
    - Ensure container images and versions are accessible
 
+## Custom Resource (CR) Interactions
+
+### NicClusterPolicy CR Flow
+The NicClusterPolicy CR is the primary configuration resource that sets up the cluster-wide networking components. Here's how it's exercised:
+
+1. **Initial Setup**
+   ```yaml
+   # Applied before running tests
+   apiVersion: mellanox.com/v1alpha1
+   kind: NicClusterPolicy
+   metadata:
+     name: nic-cluster-policy
+   spec:
+     ofedDriver:
+       image: nvcr.io/nvidia/mellanox/driver
+       repository: nvcr.io/nvidia/mellanox
+       version: 5.4-3.1.0.0
+     rdmaSharedDevicePlugin:
+       config: |
+         {
+           "configList": [{
+             "resourceName": "rdma_shared_device_a",
+             "rdmaHcaMax": 63
+           }]
+         }
+   ```
+   This CR:
+   - Configures OFED driver deployment
+   - Sets up RDMA device plugin
+   - Defines available RDMA resources
+
+2. **Test Pod Interactions**:
+   - **Resource Test Pod (03)**: Directly exercises the RDMA resources configured by NicClusterPolicy
+     ```yaml
+     # From 03-resource-test-pod.yaml
+     resources:
+       requests:
+         nvidia.com/rdma: 1
+       limits:
+         nvidia.com/rdma: 1
+     ```
+     When this pod is scheduled:
+     1. Kubernetes checks for RDMA resources
+     2. RDMA device plugin (configured by NicClusterPolicy) handles the resource allocation
+     3. Pod gets access to RDMA resources
+
+   - **Operator Validation Pod (04)**: Monitors NicClusterPolicy status
+     ```bash
+     kubectl get NicClusterPolicy
+     kubectl get pods -n nvidia-network-operator  # Shows OFED and device plugin pods
+     ```
+
+### MacvlanNetwork CR Flow
+The MacvlanNetwork CR defines secondary networks. Here's how it's exercised:
+
+1. **Network Definition**
+   ```yaml
+   # Applied for network tests
+   apiVersion: mellanox.com/v1alpha1
+   kind: MacvlanNetwork
+   metadata:
+     name: test-network
+   spec:
+     networkNamespace: "default"
+     master: "eth0"
+     mode: "bridge"
+     ipam: |
+       {
+         "type": "whereabouts",
+         "range": "192.168.2.225/28"
+       }
+   ```
+   This CR:
+   - Defines a macvlan network interface
+   - Configures IPAM
+   - Creates corresponding NetworkAttachmentDefinition
+
+2. **Test Pod Interactions**:
+   - **Basic Network Test Pod (01)**: Tests single network attachment
+     ```yaml
+     # From 01-basic-network-pod.yaml
+     metadata:
+       annotations:
+         k8s.v1.cni.cncf.io/networks: test-network
+     ```
+     Flow:
+     1. MacvlanNetwork CR creates NetworkAttachmentDefinition
+     2. Pod requests network attachment
+     3. Multus CNI reads NetworkAttachmentDefinition
+     4. Network is configured on pod
+
+   - **Multi-Network Test Pod (02)**: Tests multiple network attachments
+     ```yaml
+     # From 02-multi-network-pod.yaml
+     metadata:
+       annotations:
+         k8s.v1.cni.cncf.io/networks: test-network-1,test-network-2
+     ```
+     Flow:
+     1. Multiple MacvlanNetwork CRs create multiple NetworkAttachmentDefinitions
+     2. Pod requests multiple network attachments
+     3. Multus CNI configures multiple interfaces
+     4. Each network gets its own IP from Whereabouts IPAM
+
+### CR Status Verification
+The operator validation pod (04) continuously monitors CR status:
+
+```bash
+# NicClusterPolicy status
+kubectl get NicClusterPolicy -o yaml | grep -A 10 "status:"
+# Shows:
+# - OFED driver deployment status
+# - Device plugin status
+# - Resource availability
+
+# MacvlanNetwork status
+kubectl get MacvlanNetwork -o yaml | grep -A 5 "status:"
+# Shows:
+# - Network configuration status
+# - NetworkAttachmentDefinition creation status
+```
+
+### Component Chain
+1. **NicClusterPolicy Flow**:
+   ```
+   NicClusterPolicy CR
+   → Network Operator Controller
+   → OFED Driver Deployment
+   → RDMA Device Plugin Deployment
+   → Resource Available in Cluster
+   → Pod Resource Allocation
+   ```
+
+2. **MacvlanNetwork Flow**:
+   ```
+   MacvlanNetwork CR
+   → Network Operator Controller
+   → NetworkAttachmentDefinition Creation
+   → Multus CNI Configuration
+   → Pod Network Attachment
+   → Whereabouts IP Allocation
+   ```
+
 ## Test Pod Dependencies
 
 ### 1. Basic Network Test (`01-basic-network-pod.yaml`)
@@ -193,7 +563,7 @@ If networks are not attached:
    # Check Multus
    kubectl -n kube-system get pods -l app=multus
    kubectl -n kube-system logs -l app=multus
-   
+
    # Check Whereabouts
    kubectl -n kube-system get pods -l name=whereabouts
    kubectl -n kube-system logs -l name=whereabouts
@@ -203,7 +573,7 @@ If networks are not attached:
    ```bash
    # Get all network definitions
    kubectl get network-attachment-definitions -o yaml
-   
+
    # Check events
    kubectl get events --field-selector involvedObject.kind=NetworkAttachmentDefinition
    ```
@@ -220,7 +590,7 @@ If networks are not attached:
    ```bash
    # Check pod annotations
    kubectl get pod multi-network-test -o jsonpath='{.metadata.annotations}' | jq
-   
+
    # Check pod events
    kubectl get events --field-selector involvedObject.name=multi-network-test
    ```
@@ -228,16 +598,60 @@ If networks are not attached:
 ### 3. Resource Test (`03-resource-test-pod.yaml`)
 **Required Resources:**
 - NicClusterPolicy (status: ready)
-- RDMA Device Plugin enabled in NicClusterPolicy
+- Mock RDMA Device Plugin (for local testing)
 
 ```bash
+# For local testing, deploy the mock device plugin first
+kubectl apply -f mock-device-plugin.yaml
+
+# Wait for the mock device plugin to be ready
+kubectl -n kube-system wait --for=condition=ready pod -l name=mock-rdma-device-plugin
+
 # Verify RDMA resources are available
-kubectl get NicClusterPolicy
-kubectl describe node | grep nvidia.com/rdma
+kubectl get nodes -o custom-columns=NAME:.metadata.name,RDMA:.status.allocatable.nvidia\\\.com/rdma
 
 # Apply the test
 kubectl apply -f 03-resource-test-pod.yaml
+
+# Wait for pod to be ready
+kubectl wait --for=condition=ready pod/resource-test --timeout=60s
+
+# View resource information
+kubectl logs resource-test
 ```
+
+**Expected Output with Mock Device Plugin:**
+```
+=== CPU Info ===
+[CPU information]
+
+=== Memory Info ===
+[Memory information]
+
+=== RDMA Devices ===
+ibstat not found - RDMA tools not installed
+No InfiniBand devices found in /dev/infiniband/
+
+=== NVIDIA Devices ===
+nvidia-smi not found - NVIDIA tools not installed
+No NVIDIA devices found
+
+=== Kubernetes Resource Allocation ===
+Requests:
+  CPU: 100m
+  Memory: 64Mi
+  RDMA: 1
+Limits:
+  CPU: 200m
+  Memory: 128Mi
+  RDMA: 1
+```
+
+**Note:** When testing locally with the mock device plugin:
+1. The pod will schedule successfully and get the requested RDMA resources
+2. No actual RDMA devices will be present in the pod (this is expected)
+3. The test validates that the Kubernetes resource allocation works correctly
+4. For real RDMA testing, use a cluster with actual Mellanox hardware
 
 ### 4. Operator Validation (`04-operator-validation-pod.yaml`)
 **Required Resources:**
